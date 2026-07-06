@@ -48,7 +48,22 @@ const Sfx = (() => {
       ctx = new AC();
       master = ctx.createGain();
       master.gain.value = 1;
-      master.connect(ctx.destination);
+      // ソフトクリッパー(tanh): 爆発などの大きな音を、音割れ(デジタル歪み)させずに
+      // しっかり大きく鳴らす。通常の音量はほぼ素通りする。
+      const pre = ctx.createGain();
+      pre.gain.value = 0.25; // 入力を1/4に縮めて tanh の入力域(±1→±4相当)に収める
+      const shaper = ctx.createWaveShaper();
+      const N = 2048;
+      const curve = new Float32Array(N);
+      for (let i = 0; i < N; i++) {
+        const x = (i / (N - 1)) * 2 - 1;
+        curve[i] = Math.tanh(4 * x); // 小音量はほぼ直線、大音量はなめらかに天井へ
+      }
+      shaper.curve = curve;
+      shaper.oversample = 'none';
+      master.connect(pre);
+      pre.connect(shaper);
+      shaper.connect(ctx.destination);
 
       // 教室っぽい残響のセンドバス
       reverb = ctx.createConvolver();
@@ -215,18 +230,26 @@ const Sfx = (() => {
     noiseHit({ dur: 0.04, freq: 3200, q: 2, gain: 0.15 });
   }
 
-  /* スキルチェック失敗 = 発電機爆発 */
+  /* スキルチェック失敗 = 発電機爆発 (大きく・迫力重視) */
   function explosion(quiet) {
     if (!ready()) return;
-    const v = quiet ? 0.3 : 1;
-    noiseHit({ dur: 0.7, type: 'lowpass', freq: 2600, freqEnd: 90, q: 1,
-               gain: 0.85 * v, toReverb: 0.8 });
-    tone({ dur: 0.55, type: 'sine', freq: 150, freqEnd: 32, gain: 0.8 * v, toReverb: 0.4 });
-    noiseHit({ when: 0.05, dur: 0.25, freq: 400, q: 2, gain: 0.3 * v, toReverb: 0.6 });
-    // 破片がカラカラ落ちる
-    for (let i = 0; i < 5; i++) {
-      noiseHit({ when: 0.25 + i * 0.09 + Math.random() * 0.05, dur: 0.05,
-                 freq: 1500 + Math.random() * 2500, q: 8, gain: 0.08 * v, toReverb: 0.5 });
+    const v = quiet ? 0.32 : 1;
+    // 立ち上がりの鋭い「バリッ」(高め。タブレットの小さいスピーカーでもよく通る)
+    noiseHit({ dur: 0.06, type: 'highpass', freq: 1900, q: 0.7, gain: 1.6 * v, toReverb: 0.35 });
+    // 本体の轟音(中域中心・高→低へスイープ)
+    noiseHit({ dur: 0.85, type: 'lowpass', freq: 4000, freqEnd: 120, q: 0.8,
+               gain: 2.2 * v, toReverb: 0.9 });
+    noiseHit({ when: 0.015, dur: 0.5, type: 'bandpass', freq: 900, q: 1.0,
+               gain: 1.6 * v, toReverb: 0.7 });
+    noiseHit({ when: 0.02, dur: 0.45, type: 'bandpass', freq: 2200, q: 0.9,
+               gain: 1.1 * v, toReverb: 0.6 });
+    // ズドンという低音(大きいスピーカー用の重み)
+    tone({ dur: 0.6, type: 'sine', freq: 165, freqEnd: 30, gain: 1.4 * v, toReverb: 0.4 });
+    tone({ dur: 0.5, type: 'square', freq: 82, freqEnd: 27, gain: 0.7 * v, toReverb: 0.3 });
+    // 破片が飛び散る
+    for (let i = 0; i < 8; i++) {
+      noiseHit({ when: 0.16 + i * 0.06 + Math.random() * 0.05, dur: 0.05,
+                 freq: 1800 + Math.random() * 3000, q: 8, gain: 0.18 * v, toReverb: 0.5 });
     }
   }
 
