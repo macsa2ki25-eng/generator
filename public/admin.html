@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>スタッフ画面 - FIND ME</title>
+<link rel="stylesheet" href="/css/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%94%A7%3C/text%3E%3C/svg%3E">
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute">
+  <filter id="roughen">
+    <feTurbulence type="fractalNoise" baseFrequency="0.08" numOctaves="3" result="n" seed="7"/>
+    <feDisplacementMap in="SourceGraphic" in2="n" scale="7"/>
+  </filter>
+</svg>
+
+<div class="fog"></div>
+
+<main class="admin">
+  <h1>
+    <span class="horror-title" style="font-size:1.2em">FIND ME</span>
+    <span style="color:var(--dim); font-size:0.6em; letter-spacing:0.2em;">スタッフ画面</span>
+    <span class="phase-badge" id="phaseBadge">…</span>
+    <a class="home-link" href="/">← トップへ</a>
+  </h1>
+
+  <div class="admin-grid">
+    <div class="panel admin-timer-card">
+      <div>
+        <div style="color:var(--dim); font-size:13px; letter-spacing:0.2em; margin-bottom:4px;">残り時間</div>
+        <div class="admin-timer num" id="adminTimer">-:--</div>
+      </div>
+      <div class="admin-controls">
+        <button class="btn primary" id="startBtn">▶ ゲームスタート</button>
+        <button class="btn" id="resetBtn">⟲ リセット</button>
+      </div>
+    </div>
+
+    <div class="panel gen-card" id="genCard0">
+      <div class="gc-head"><span class="gc-title">発電機 1</span><span class="gc-pct num">0%</span></div>
+      <div class="pbar"><div class="fill"></div><div class="ticks"></div></div>
+      <div class="gc-status">待機</div>
+    </div>
+    <div class="panel gen-card" id="genCard1">
+      <div class="gc-head"><span class="gc-title">発電機 2</span><span class="gc-pct num">0%</span></div>
+      <div class="pbar"><div class="fill"></div><div class="ticks"></div></div>
+      <div class="gc-status">待機</div>
+    </div>
+    <div class="panel gen-card" id="genCard2">
+      <div class="gc-head"><span class="gc-title">発電機 3</span><span class="gc-pct num">0%</span></div>
+      <div class="pbar"><div class="fill"></div><div class="ticks"></div></div>
+      <div class="gc-status">待機</div>
+    </div>
+  </div>
+
+  <div class="panel settings">
+    <h2>⚙ 設定</h2>
+    <p class="settings-note">変えたら最後に「保存」を押してください。全タブレットにすぐ反映されます。</p>
+
+    <div class="setting-row">
+      <div class="sr-label">🔧 修理にかかる時間（発電機1台あたり）</div>
+      <div class="sr-help">押しっぱなしにしたとき、何秒で修理が終わるか</div>
+      <div class="choice-row">
+        <div class="stepper">
+          <button type="button" id="repairMinus">−</button>
+          <span class="stepper-value num" id="repairValue">90秒</span>
+          <button type="button" id="repairPlus">＋</button>
+        </div>
+        <button type="button" class="btn small preset" data-key="repairSeconds" data-value="60">60秒</button>
+        <button type="button" class="btn small preset" data-key="repairSeconds" data-value="90">90秒</button>
+        <button type="button" class="btn small preset" data-key="repairSeconds" data-value="120">120秒</button>
+      </div>
+    </div>
+
+    <div class="setting-row">
+      <div class="sr-label">⏰ 制限時間（タイムオーバーまで）</div>
+      <div class="sr-help">この時間内に3台すべて復旧できないと TIME OVER</div>
+      <div class="choice-row">
+        <div class="stepper">
+          <button type="button" id="limitMinus">−</button>
+          <span class="stepper-value num" id="limitValue">5分00秒</span>
+          <button type="button" id="limitPlus">＋</button>
+        </div>
+        <button type="button" class="btn small preset" data-key="limitSeconds" data-value="180">3分</button>
+        <button type="button" class="btn small preset" data-key="limitSeconds" data-value="300">5分</button>
+        <button type="button" class="btn small preset" data-key="limitSeconds" data-value="420">7分</button>
+        <button type="button" class="btn small preset" data-key="limitSeconds" data-value="600">10分</button>
+      </div>
+    </div>
+
+    <div class="setting-row">
+      <div class="sr-label">🎯 スキルチェック</div>
+      <div class="sr-help">修理中にときどき出る「タイミングよくタップ」のミニゲーム。失敗すると爆発してゲージが減る</div>
+      <div class="choice-row" id="skillChoices">
+        <button type="button" class="btn small choice" data-value="off">なし</button>
+        <button type="button" class="btn small choice" data-value="easy">かんたん</button>
+        <button type="button" class="btn small choice" data-value="normal">ふつう</button>
+        <button type="button" class="btn small choice" data-value="hard">むずかしい</button>
+      </div>
+    </div>
+
+    <div class="setting-row">
+      <div class="sr-label">💥 スキルチェック失敗のペナルティ</div>
+      <div class="sr-help">失敗したとき、修理ゲージが何%減るか</div>
+      <div class="choice-row" id="penaltyChoices">
+        <button type="button" class="btn small choice" data-value="5">5%</button>
+        <button type="button" class="btn small choice" data-value="10">10%</button>
+        <button type="button" class="btn small choice" data-value="15">15%</button>
+        <button type="button" class="btn small choice" data-value="20">20%</button>
+      </div>
+    </div>
+
+    <div class="setting-row">
+      <div class="sr-label">📉 さわっていない間にゲージが下がる</div>
+      <div class="sr-help">オンにすると難しくなる（修理をやめると少しずつ戻ってしまう）</div>
+      <div class="choice-row" id="regressionChoices">
+        <button type="button" class="btn small choice" data-value="false">オフ</button>
+        <button type="button" class="btn small choice" data-value="true">オン</button>
+      </div>
+    </div>
+
+    <div class="save-row">
+      <button class="btn amber" id="saveBtn" style="font-size:22px; padding:16px 44px;">💾 保存</button>
+      <span class="save-msg" id="saveMsg">✓ 保存しました。全タブレットに反映されます</span>
+    </div>
+  </div>
+</main>
+
+<button class="btn small sound-toggle" id="soundToggle">🔇 効果音オフ</button>
+
+<div class="conn-banner" id="connBanner" hidden>
+  <span>⚠ サーバーに接続できません（再接続中…）</span>
+</div>
+
+<div class="vignette"></div>
+<div class="grain"></div>
+
+<script src="/js/audio.js"></script>
+<script src="/js/net.js"></script>
+<script src="/js/admin.js"></script>
+</body>
+</html>

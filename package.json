@@ -1,0 +1,9 @@
+{
+  "name": "find-me-generator",
+  "version": "1.0.0",
+  "private": true,
+  "description": "文化祭「FIND ME」用 発電機修理アプリ (Dead by Daylight風)",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
