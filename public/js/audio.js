@@ -126,58 +126,68 @@ const Sfx = (() => {
   }
 
   /* ================================================================ */
-  /* 修理音ループ: 低いうなり + 金属のガチャガチャ                     */
+  /* 修理音ループ: 往復するピストン + 金属のこすれ + 低いエンジン音     */
+  /*   ※ ピッチのある電子音は使わず、すべてノイズから機械音を作る      */
   /* ================================================================ */
+
+  /* 金属の当たる「カチャッ」(倍音のあるノイズ。単一トーンにしない) */
+  function metalClank(when, gain, bright) {
+    noiseHit({ when, dur: 0.045, type: 'bandpass', freq: bright ? 3200 : 2100,
+               q: 2.2, gain: gain, toReverb: 0.3 });
+    noiseHit({ when: when + 0.004, dur: 0.06, type: 'bandpass',
+               freq: 1150 + Math.random() * 250, q: 3, gain: gain * 0.7, toReverb: 0.25 });
+  }
 
   function setRepairing(on) {
     if (!ready()) return;
     if (on && !repair) {
-      const rumbleOsc = ctx.createOscillator();
-      rumbleOsc.type = 'sawtooth';
-      rumbleOsc.frequency.value = 46;
+      // --- 低いエンジンのうなり(ノイズを低く濾したもの。シンセ臭さを消す) ---
+      const rumbleSrc = ctx.createBufferSource();
+      rumbleSrc.buffer = noiseBuf;
+      rumbleSrc.loop = true;
       const rumbleLp = ctx.createBiquadFilter();
       rumbleLp.type = 'lowpass';
-      rumbleLp.frequency.value = 120;
+      rumbleLp.frequency.value = 170;
+      rumbleLp.Q.value = 0.7;
       const rumbleGain = ctx.createGain();
-      rumbleGain.gain.value = 0.10;
-      const lfo = ctx.createOscillator();
-      lfo.frequency.value = 6.5;
-      const lfoGain = ctx.createGain();
-      lfoGain.gain.value = 0.045;
-      lfo.connect(lfoGain); lfoGain.connect(rumbleGain.gain);
-      rumbleOsc.connect(rumbleLp); rumbleLp.connect(rumbleGain); rumbleGain.connect(master);
-      rumbleOsc.start(); lfo.start();
+      rumbleGain.gain.value = 0.13;
+      rumbleSrc.connect(rumbleLp); rumbleLp.connect(rumbleGain); rumbleGain.connect(master);
+      rumbleSrc.start();
 
-      // ガチャガチャ音のスケジューラ (少し先まで予約しておく方式)
+      // --- ピストンの往復(規則的なリズムで「ドッ…ドッ…」) ---
+      const period = 0.24;       // 1ストロークの間隔(秒)
       let nextAt = now() + 0.05;
+      let stroke = 0;
       const timer = setInterval(() => {
         if (!repair) return;
-        const horizon = now() + 0.35;
+        const horizon = now() + 0.4;
         while (nextAt < horizon) {
-          const strong = Math.random() < 0.22;
-          noiseHit({
-            when: Math.max(0, nextAt - now()),
-            dur: strong ? 0.1 : 0.05,
-            freq: 800 + Math.random() * 1600,
-            q: 6,
-            gain: strong ? 0.34 : 0.16,
-            toReverb: strong ? 0.4 : 0.15,
-          });
-          if (strong) {
-            tone({ when: Math.max(0, nextAt - now()), dur: 0.09, type: 'triangle',
-                   freq: 180 + Math.random() * 160, gain: 0.18, toReverb: 0.3 });
+          const jitter = (Math.random() - 0.5) * 0.02; // ごく僅かな揺らぎ(手回し感)
+          const w = Math.max(0, nextAt - now() + jitter);
+          const up = (stroke % 2 === 0);               // 上死点/下死点で音色を変える
+          // ピストンが打ち込む重い打撃(低域を高→低へスイープ)
+          noiseHit({ when: w, dur: up ? 0.11 : 0.09, type: 'lowpass',
+                     freq: up ? 240 : 320, freqEnd: up ? 65 : 85, q: 1.2,
+                     gain: up ? 0.36 : 0.30, toReverb: 0.22 });
+          // 金属の噛み合う音
+          metalClank(w + 0.012, up ? 0.11 : 0.08, up);
+          // 歯車がこすれる細かい音(たまに)
+          if (Math.random() < 0.5) {
+            noiseHit({ when: w + 0.05 + Math.random() * 0.06, dur: 0.05,
+                       type: 'highpass', freq: 2000, q: 0.8, gain: 0.045, toReverb: 0.15 });
           }
-          nextAt += 0.08 + Math.random() * 0.09;
+          stroke++;
+          nextAt += period + (Math.random() - 0.5) * 0.025;
         }
-      }, 120);
+      }, 110);
 
-      repair = { rumbleOsc, lfo, rumbleGain, timer };
+      repair = { rumbleSrc, rumbleGain, timer };
     } else if (!on && repair) {
       const r = repair;
       repair = null;
       clearInterval(r.timer);
       r.rumbleGain.gain.setTargetAtTime(0, now(), 0.05);
-      setTimeout(() => { try { r.rumbleOsc.stop(); r.lfo.stop(); } catch (_) {} }, 300);
+      setTimeout(() => { try { r.rumbleSrc.stop(); } catch (_) {} }, 300);
     }
   }
 
