@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>スイングトレード分析</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
+</head>
+<body>
+<div id="demo-banner" class="hidden">⚠ デモデータ表示中 — これは実在の株価ではありません(SWT_PROVIDER=demo)</div>
+
+<header>
+  <div class="brand">
+    <span class="brand-title">スイングトレード分析</span>
+    <span class="brand-sub">JPX主要銘柄</span>
+  </div>
+  <input id="search" type="text" placeholder="コード・銘柄名で検索 (4桁コード+Enterで直接表示)" autocomplete="off">
+  <div class="header-right">
+    <span id="refresh-progress"></span>
+    <button id="refresh-btn" title="全銘柄の日足データを更新">データ更新</button>
+  </div>
+</header>
+
+<div id="layout">
+  <aside>
+    <div class="list-controls">
+      <select id="filter">
+        <option value="all">すべての銘柄</option>
+        <option value="po">パーフェクトオーダー</option>
+        <option value="above60">60日線より上</option>
+        <option value="near_high">52週高値圏</option>
+        <option value="vol_surge">出来高急増(2倍超)</option>
+      </select>
+      <select id="sort">
+        <option value="turnover">売買代金順</option>
+        <option value="change_pct">騰落率順</option>
+        <option value="vol_ratio">出来高倍率順</option>
+        <option value="code">コード順</option>
+      </select>
+    </div>
+    <div id="stock-list" tabindex="0"></div>
+  </aside>
+
+  <main>
+    <div id="empty-state">
+      <div class="empty-inner">
+        <div class="empty-icon">📊</div>
+        <p>左のリストから銘柄を選択してください。</p>
+        <p class="muted">初回は「データ更新」を押して株価データを取得します。</p>
+      </div>
+    </div>
+
+    <div id="stock-view" class="hidden">
+      <div id="stock-header">
+        <div class="sh-left">
+          <div class="sh-name-row">
+            <span id="sh-name">—</span>
+            <span id="sh-code" class="chip">—</span>
+            <span id="sh-sector" class="chip chip-sector">—</span>
+            <span id="sh-po" class="chip chip-po hidden">パーフェクトオーダー</span>
+            <span id="sh-nh" class="chip chip-nh hidden">52週高値圏</span>
+          </div>
+          <div class="sh-price-row">
+            <span id="sh-price">—</span>
+            <span id="sh-change">—</span>
+            <span id="sh-date" class="muted"></span>
+          </div>
+        </div>
+        <div class="sh-stats" id="sh-stats"></div>
+      </div>
+
+      <div id="chart-toolbar">
+        <div class="tf-tabs" id="tf-tabs">
+          <button data-tf="m5">5分</button>
+          <button data-tf="m15">15分</button>
+          <button data-tf="D" class="active">日足</button>
+          <button data-tf="W">週足</button>
+          <button data-tf="M">月足</button>
+        </div>
+        <div class="ma-legend" id="ma-legend"></div>
+      </div>
+
+      <div id="chart-wrap">
+        <div id="chart"></div>
+        <div id="chart-legend"></div>
+        <div id="chart-loading" class="hidden">読み込み中…</div>
+      </div>
+
+      <footer>
+        個人利用の分析ツールです。表示データには遅延・誤差が含まれる場合があります。投資判断はご自身の責任で行ってください。
+        価格帯別出来高は四本値からの近似計算です。
+      </footer>
+    </div>
+  </main>
+</div>
+
+<div id="toast" class="hidden"></div>
+
+<script src="vendor/lightweight-charts.standalone.production.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
