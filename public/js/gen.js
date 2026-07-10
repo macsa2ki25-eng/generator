@@ -338,6 +338,25 @@ el.touchLayer.addEventListener('pointerdown', (e) => {
 window.addEventListener('blur', () => { pointers.clear(); refreshTouching(); });
 document.addEventListener('contextmenu', (e) => e.preventDefault());
 
+/* どこをタップしても音声を有効化する(待機画面・スタートボタンなど、
+   タッチ領域以外を触ったときも確実にロック解除するための保険) */
+['pointerdown', 'touchend', 'click'].forEach((ev) => {
+  document.addEventListener(ev, () => Sfx.unlock(), true);
+});
+
+/* 音声が有効かを示すバッジ。有効になっていない端末では「タップで音を出す」を表示。
+   これで、どのタブレットの音が止まっているか一目で分かり、その場で復帰できる。 */
+const audioChip = document.createElement('button');
+audioChip.id = 'audioChip';
+audioChip.textContent = '🔇 タップで音を出す';
+audioChip.addEventListener('pointerdown', (e) => {
+  e.stopPropagation();
+  Sfx.unlock();
+  setTimeout(() => Sfx.click(), 60); // 鳴れば音が出たと分かる
+});
+document.body.appendChild(audioChip);
+setInterval(() => { audioChip.classList.toggle('ready', Sfx.ready()); }, 400);
+
 /* キーボードでも試せるように (PCテスト用: スペース長押し / Enterでスキルチェック) */
 document.addEventListener('keydown', (e) => {
   if (e.code === 'Space' && !e.repeat) {

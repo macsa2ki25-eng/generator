@@ -15,6 +15,7 @@ const Sfx = (() => {
 
   /* ---- 継続音のノード ---- */
   let repair = null;      // 修理ループ
+  let wantRepair = false; // 修理音を鳴らしたい状態か(コンテキスト再開後に開始するため)
   let hum = null;         // 完了後のエンジン音
   let heartbeatTimer = null;
   let droneNodes = null;  // タイムオーバーの持続音
@@ -74,13 +75,33 @@ const Sfx = (() => {
       revGain.connect(master);
 
       noiseBuf = makeNoiseBuffer();
+
+      // コンテキストが再開したら、鳴らしたかった修理音を開始する
+      ctx.onstatechange = () => {
+        if (ctx.state === 'running' && wantRepair && !repair) startRepair();
+      };
     }
     if (ctx.state === 'suspended') ctx.resume();
+    // iOS/一部端末のロック解除: 無音バッファを1回鳴らして音声出力を有効化する
+    try {
+      const b = ctx.createBufferSource();
+      b.buffer = ctx.createBuffer(1, 1, ctx.sampleRate);
+      b.connect(ctx.destination);
+      b.start(0);
+    } catch (_) {}
     unlocked = true;
     return true;
   }
 
   function ready() { return unlocked && ctx && ctx.state === 'running'; }
+
+  /* 音を鳴らす前の保険: コンテキストがあれば(一時停止でも)再開を試みて true を返す。
+     一時停止中でも予約した音は再開時に鳴るので、ready()で捨てずにこれで通す。 */
+  function ensure() {
+    if (!ctx) return false;
+    if (ctx.state === 'suspended') ctx.resume();
+    return true;
+  }
 
   /* ---- 部品: ノイズ一発 ---- */
   function noiseHit({ when = 0, dur = 0.08, type = 'bandpass', freq = 1200, q = 5,
@@ -138,56 +159,70 @@ const Sfx = (() => {
                freq: 1150 + Math.random() * 250, q: 3, gain: gain * 0.7, toReverb: 0.25 });
   }
 
-  function setRepairing(on) {
-    if (!ready()) return;
-    if (on && !repair) {
-      // --- 低いエンジンのうなり(ノイズを低く濾したもの。シンセ臭さを消す) ---
-      const rumbleSrc = ctx.createBufferSource();
-      rumbleSrc.buffer = noiseBuf;
-      rumbleSrc.loop = true;
-      const rumbleLp = ctx.createBiquadFilter();
-      rumbleLp.type = 'lowpass';
-      rumbleLp.frequency.value = 170;
-      rumbleLp.Q.value = 0.7;
-      const rumbleGain = ctx.createGain();
-      rumbleGain.gain.value = 0.13;
-      rumbleSrc.connect(rumbleLp); rumbleLp.connect(rumbleGain); rumbleGain.connect(master);
-      rumbleSrc.start();
+  function startRepair() {
+    if (repair || !ctx) return;
+    // --- 低いエンジンのうなり(ノイズを低く濾したもの。シンセ臭さを消す) ---
+    const rumbleSrc = ctx.createBufferSource();
+    rumbleSrc.buffer = noiseBuf;
+    rumbleSrc.loop = true;
+    const rumbleLp = ctx.createBiquadFilter();
+    rumbleLp.type = 'lowpass';
+    rumbleLp.frequency.value = 170;
+    rumbleLp.Q.value = 0.7;
+    const rumbleGain = ctx.createGain();
+    rumbleGain.gain.value = 0.13;
+    rumbleSrc.connect(rumbleLp); rumbleLp.connect(rumbleGain); rumbleGain.connect(master);
+    rumbleSrc.start();
 
-      // --- ピストンの往復(規則的なリズムで「ドッ…ドッ…」) ---
-      const period = 0.24;       // 1ストロークの間隔(秒)
-      let nextAt = now() + 0.05;
-      let stroke = 0;
-      const timer = setInterval(() => {
-        if (!repair) return;
-        const horizon = now() + 0.4;
-        while (nextAt < horizon) {
-          const jitter = (Math.random() - 0.5) * 0.02; // ごく僅かな揺らぎ(手回し感)
-          const w = Math.max(0, nextAt - now() + jitter);
-          const up = (stroke % 2 === 0);               // 上死点/下死点で音色を変える
-          // ピストンが打ち込む重い打撃(低域を高→低へスイープ)
-          noiseHit({ when: w, dur: up ? 0.11 : 0.09, type: 'lowpass',
-                     freq: up ? 240 : 320, freqEnd: up ? 65 : 85, q: 1.2,
-                     gain: up ? 0.36 : 0.30, toReverb: 0.22 });
-          // 金属の噛み合う音
-          metalClank(w + 0.012, up ? 0.11 : 0.08, up);
-          // 歯車がこすれる細かい音(たまに)
-          if (Math.random() < 0.5) {
-            noiseHit({ when: w + 0.05 + Math.random() * 0.06, dur: 0.05,
-                       type: 'highpass', freq: 2000, q: 0.8, gain: 0.045, toReverb: 0.15 });
-          }
-          stroke++;
-          nextAt += period + (Math.random() - 0.5) * 0.025;
+    // --- ピストンの往復(規則的なリズムで「ドッ…ドッ…」) ---
+    const period = 0.24;       // 1ストロークの間隔(秒)
+    let nextAt = now() + 0.05;
+    let stroke = 0;
+    const timer = setInterval(() => {
+      if (!repair) return;
+      const horizon = now() + 0.4;
+      while (nextAt < horizon) {
+        const jitter = (Math.random() - 0.5) * 0.02; // ごく僅かな揺らぎ(手回し感)
+        const w = Math.max(0, nextAt - now() + jitter);
+        const up = (stroke % 2 === 0);               // 上死点/下死点で音色を変える
+        // ピストンが打ち込む重い打撃(低域を高→低へスイープ)
+        noiseHit({ when: w, dur: up ? 0.11 : 0.09, type: 'lowpass',
+                   freq: up ? 240 : 320, freqEnd: up ? 65 : 85, q: 1.2,
+                   gain: up ? 0.36 : 0.30, toReverb: 0.22 });
+        // 金属の噛み合う音
+        metalClank(w + 0.012, up ? 0.11 : 0.08, up);
+        // 歯車がこすれる細かい音(たまに)
+        if (Math.random() < 0.5) {
+          noiseHit({ when: w + 0.05 + Math.random() * 0.06, dur: 0.05,
+                     type: 'highpass', freq: 2000, q: 0.8, gain: 0.045, toReverb: 0.15 });
         }
-      }, 110);
+        stroke++;
+        nextAt += period + (Math.random() - 0.5) * 0.025;
+      }
+    }, 110);
 
-      repair = { rumbleSrc, rumbleGain, timer };
-    } else if (!on && repair) {
-      const r = repair;
-      repair = null;
-      clearInterval(r.timer);
-      r.rumbleGain.gain.setTargetAtTime(0, now(), 0.05);
-      setTimeout(() => { try { r.rumbleSrc.stop(); } catch (_) {} }, 300);
+    repair = { rumbleSrc, rumbleGain, timer };
+  }
+
+  function stopRepair() {
+    if (!repair) return;
+    const r = repair;
+    repair = null;
+    clearInterval(r.timer);
+    r.rumbleGain.gain.setTargetAtTime(0, now(), 0.05);
+    setTimeout(() => { try { r.rumbleSrc.stop(); } catch (_) {} }, 300);
+  }
+
+  /* 修理音のオン/オフ。まだコンテキストが再開していなくても、
+     wantRepair を立てておけば onstatechange(再開時)に自動で鳴り始める。 */
+  function setRepairing(on) {
+    wantRepair = on;
+    if (!ctx) return;
+    if (on) {
+      if (ctx.state === 'suspended') ctx.resume();
+      if (ctx.state === 'running') startRepair();
+    } else {
+      stopRepair();
     }
   }
 
@@ -196,7 +231,7 @@ const Sfx = (() => {
   /* ================================================================ */
 
   function humOn() {
-    if (!ready() || hum) return;
+    if (!ensure() || hum) return;
     const o1 = ctx.createOscillator(); o1.type = 'sawtooth'; o1.frequency.value = 55;
     const o2 = ctx.createOscillator(); o2.type = 'sawtooth'; o2.frequency.value = 55.7;
     const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 150;
@@ -220,21 +255,21 @@ const Sfx = (() => {
 
   /* スキルチェック警告 (トゥン・トゥン) */
   function skillWarn() {
-    if (!ready()) return;
+    if (!ensure()) return;
     tone({ dur: 0.12, freq: 1150, gain: 0.30, toReverb: 0.5 });
     tone({ when: 0.16, dur: 0.14, freq: 870, gain: 0.30, toReverb: 0.5 });
   }
 
   /* スキルチェック成功 */
   function skillGood() {
-    if (!ready()) return;
+    if (!ensure()) return;
     noiseHit({ dur: 0.05, freq: 2400, q: 3, gain: 0.25 });
     tone({ dur: 0.08, type: 'triangle', freq: 520, gain: 0.2 });
   }
 
   /* グレイト成功 */
   function skillGreat() {
-    if (!ready()) return;
+    if (!ensure()) return;
     tone({ dur: 0.16, freq: 1318, gain: 0.24, toReverb: 0.5 });
     tone({ when: 0.05, dur: 0.22, freq: 1760, gain: 0.2, toReverb: 0.5 });
     noiseHit({ dur: 0.04, freq: 3200, q: 2, gain: 0.15 });
@@ -242,7 +277,7 @@ const Sfx = (() => {
 
   /* スキルチェック失敗 = 発電機爆発 (大きく・迫力重視) */
   function explosion(quiet) {
-    if (!ready()) return;
+    if (!ensure()) return;
     const v = quiet ? 0.32 : 1;
     // 立ち上がりの鋭い「バリッ」(高め。タブレットの小さいスピーカーでもよく通る)
     noiseHit({ dur: 0.06, type: 'highpass', freq: 1900, q: 0.7, gain: 1.6 * v, toReverb: 0.35 });
@@ -265,7 +300,7 @@ const Sfx = (() => {
 
   /* 自分の発電機が完了 (ガチャン + エンジン始動) */
   function genDone() {
-    if (!ready()) return;
+    if (!ensure()) return;
     // ガチャンッ
     noiseHit({ dur: 0.18, freq: 700, q: 3, gain: 0.5, toReverb: 0.7 });
     tone({ dur: 0.3, type: 'triangle', freq: 220, freqEnd: 90, gain: 0.4, toReverb: 0.5 });
@@ -279,14 +314,14 @@ const Sfx = (() => {
 
   /* 他の発電機が完了 (遠くの鐘のような音) */
   function distantDone() {
-    if (!ready()) return;
+    if (!ensure()) return;
     tone({ dur: 0.9, type: 'sine', freq: 392, gain: 0.14, toReverb: 0.9 });
     tone({ when: 0.02, dur: 1.1, type: 'sine', freq: 587, gain: 0.1, toReverb: 0.9 });
   }
 
   /* ゲート開放 (クラクション風の勝利音) */
   function gateOpen() {
-    if (!ready()) return;
+    if (!ensure()) return;
     for (let i = 0; i < 3; i++) {
       const t = i * 0.55;
       tone({ when: t, dur: 0.45, type: 'square', freq: 392, gain: 0.16, toReverb: 0.7 });
@@ -300,7 +335,7 @@ const Sfx = (() => {
 
   /* タイムオーバー (重い低音ドローン) */
   function timeoverStart() {
-    if (!ready() || droneNodes) return;
+    if (!ensure() || droneNodes) return;
     setRepairing(false);
     humOff();
     heartbeat(false);
@@ -327,7 +362,7 @@ const Sfx = (() => {
   let hbIntensity = 0;
   function heartbeat(on, intensity = 0) {
     hbIntensity = intensity;
-    if (on && !heartbeatTimer && ready()) {
+    if (on && !heartbeatTimer && ensure()) {
       const beat = () => {
         if (!heartbeatTimer) return;
         tone({ dur: 0.14, type: 'sine', freq: 58, freqEnd: 36, gain: 0.5 });
@@ -344,13 +379,13 @@ const Sfx = (() => {
 
   /* 秒読みのカチッという音 */
   function tick() {
-    if (!ready()) return;
+    if (!ensure()) return;
     noiseHit({ dur: 0.03, freq: 3000, q: 10, gain: 0.12 });
   }
 
   /* UIボタン */
   function click() {
-    if (!ready()) return;
+    if (!ensure()) return;
     noiseHit({ dur: 0.04, freq: 1800, q: 6, gain: 0.1 });
   }
 
