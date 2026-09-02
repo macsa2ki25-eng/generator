@@ -123,7 +123,7 @@ async function requestWakeLock() {
   } catch (_) {}
 }
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') requestWakeLock();
+  if (document.visibilityState === 'visible') { requestWakeLock(); Sfx.unlock(); }
 });
 
 let fsTried = false;

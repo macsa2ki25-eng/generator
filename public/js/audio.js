@@ -49,16 +49,18 @@ const Sfx = (() => {
       ctx = new AC();
       master = ctx.createGain();
       master.gain.value = 1;
-      // ソフトクリッパー(tanh): 爆発などの大きな音を、音割れ(デジタル歪み)させずに
-      // しっかり大きく鳴らす。通常の音量はほぼ素通りする。
+      // 最大音量で鳴らすための「ドライブ + tanhサチュレーター」。
+      // 信号を大きく増幅して tanh で天井(±1)まで潰す＝実質フルボリューム。
+      // ガヤガヤした会場向けに、音割れより「聞こえること」を優先している。
+      // もっと大きく/小さくしたい時は、この pre.gain(ドライブ量)を上げ下げする。
       const pre = ctx.createGain();
-      pre.gain.value = 0.25; // 入力を1/4に縮めて tanh の入力域(±1→±4相当)に収める
+      pre.gain.value = 1.3; // ドライブ量(大きいほど爆音)。1.0で±1入力→tanh(4)相当
       const shaper = ctx.createWaveShaper();
       const N = 2048;
       const curve = new Float32Array(N);
       for (let i = 0; i < N; i++) {
         const x = (i / (N - 1)) * 2 - 1;
-        curve[i] = Math.tanh(4 * x); // 小音量はほぼ直線、大音量はなめらかに天井へ
+        curve[i] = Math.tanh(4 * x); // 天井を超えない(=デジタル的なプチッという歪みは出ない)
       }
       shaper.curve = curve;
       shaper.oversample = 'none';
@@ -170,7 +172,7 @@ const Sfx = (() => {
     rumbleLp.frequency.value = 170;
     rumbleLp.Q.value = 0.7;
     const rumbleGain = ctx.createGain();
-    rumbleGain.gain.value = 0.13;
+    rumbleGain.gain.value = 0.26;
     rumbleSrc.connect(rumbleLp); rumbleLp.connect(rumbleGain); rumbleGain.connect(master);
     rumbleSrc.start();
 
@@ -188,13 +190,13 @@ const Sfx = (() => {
         // ピストンが打ち込む重い打撃(低域を高→低へスイープ)
         noiseHit({ when: w, dur: up ? 0.11 : 0.09, type: 'lowpass',
                    freq: up ? 240 : 320, freqEnd: up ? 65 : 85, q: 1.2,
-                   gain: up ? 0.36 : 0.30, toReverb: 0.22 });
+                   gain: up ? 0.6 : 0.5, toReverb: 0.22 });
         // 金属の噛み合う音
-        metalClank(w + 0.012, up ? 0.11 : 0.08, up);
+        metalClank(w + 0.012, up ? 0.2 : 0.15, up);
         // 歯車がこすれる細かい音(たまに)
         if (Math.random() < 0.5) {
           noiseHit({ when: w + 0.05 + Math.random() * 0.06, dur: 0.05,
-                     type: 'highpass', freq: 2000, q: 0.8, gain: 0.045, toReverb: 0.15 });
+                     type: 'highpass', freq: 2000, q: 0.8, gain: 0.09, toReverb: 0.15 });
         }
         stroke++;
         nextAt += period + (Math.random() - 0.5) * 0.025;
