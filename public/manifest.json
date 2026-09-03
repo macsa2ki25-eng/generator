@@ -1,0 +1,19 @@
+{
+  "name": "FIND ME 発電機",
+  "short_name": "FIND ME",
+  "description": "文化祭「FIND ME」発電機修理アプリ",
+  "start_url": "/",
+  "scope": "/",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#070605",
+  "theme_color": "#070605",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

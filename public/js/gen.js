@@ -119,11 +119,26 @@ async function requestWakeLock() {
   try {
     if ('wakeLock' in navigator && (!wakeLock || wakeLock.released)) {
       wakeLock = await navigator.wakeLock.request('screen');
+      // OSに解除されても、次の機会に取り直せるようにしておく
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
     }
-  } catch (_) {}
+  } catch (_) { wakeLock = null; }
 }
+// 復帰時・フォーカス時に画面ロック防止を取り直す。定期的にも試みる(取りこぼし対策)
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') { requestWakeLock(); Sfx.unlock(); }
+});
+window.addEventListener('focus', () => { requestWakeLock(); Sfx.unlock(); });
+setInterval(() => { if (document.visibilityState === 'visible') requestWakeLock(); }, 20000);
+
+// この端末が担当している発電機番号を覚えておく(閉じても再開できるように)
+try { localStorage.setItem('findme.lastGen', String(genNo)); } catch (_) {}
+
+// 不意に閉じる/再読み込みしようとしたら確認を出す(PCブラウザ向けの保険)
+window.addEventListener('beforeunload', (e) => {
+  e.preventDefault();
+  e.returnValue = '';
+  return '';
 });
 
 let fsTried = false;
@@ -140,15 +155,15 @@ function tryFullscreenOnce() {
 /* ---------------- スキルチェック ---------------- */
 
 const SC_CONF = {
-  easy:   { speed: 220, zone: 68, great: 15 },
-  normal: { speed: 290, zone: 50, great: 14 },
-  hard:   { speed: 350, zone: 36, great: 12 },
+  easy:   { speed: 125, zone: 125, great: 32 }, // ゾーンが広く針も遅い＝当てやすい
+  normal: { speed: 165, zone: 100, great: 26 },
+  hard:   { speed: 225, zone: 72,  great: 18 },
 };
 const SC_CIRC = 490.1; // r=78 の円周
 
 let sc = null;               // null | {stage, angle, zoneStart, conf, ...}
 let touchAccum = 0;          // 修理していた累計秒
-let nextCheckAt = 5 + Math.random() * 7;
+let nextCheckAt = 12 + Math.random() * 10;   // 最初のスキルチェックまで(秒)。控えめに
 
 function ownDone() { return S && S.gens[genIndex].done; }
 function skillEnabled() {
@@ -156,11 +171,11 @@ function skillEnabled() {
 }
 
 function scheduleNext() {
-  nextCheckAt = touchAccum + 7 + Math.random() * 9;
+  nextCheckAt = touchAccum + 14 + Math.random() * 12; // 次まで14〜26秒(ゆったり)
 }
 
 function startSkillWarn() {
-  sc = { stage: 'warn', until: performance.now() + 450 };
+  sc = { stage: 'warn', until: performance.now() + 700 }; // 予告を長めに(反応の余裕)
   Sfx.skillWarn();
 }
 
@@ -170,7 +185,7 @@ function startSkillActive() {
     stage: 'active',
     conf,
     startTime: performance.now(),
-    zoneStart: 120 + Math.random() * 140,
+    zoneStart: 100 + Math.random() * 105, // ゾーン位置(針の到達に少し間がある)
   };
   const goodLen = (conf.zone / 360) * SC_CIRC;
   const greatLen = (conf.great / 360) * SC_CIRC;
@@ -199,7 +214,7 @@ function resolveSkill(kind) {
   sc = { stage: 'result', until: performance.now() + 500 };
 
   if (kind === 'great') { Sfx.skillGreat(); link.skill(genIndex, 'great'); }
-  else if (kind === 'good') { Sfx.skillGood(); }
+  else if (kind === 'good') { Sfx.skillGood(); link.skill(genIndex, 'good'); }
   else {
     lastLocalFail = Date.now();
     Sfx.explosion();
@@ -310,8 +325,9 @@ function setTouching(t) {
     el.noiseWarn.style.visibility = 'hidden';
     el.machine.classList.remove('working');
     clearInterval(keepaliveTimer);
-    if (sc && sc.stage === 'active') resolveSkill('fail'); // 手を離した = 失敗
-    else if (sc && sc.stage === 'warn') cancelSkill();
+    // 指を離しても即失敗にはしない(やさしめ)。予告中に離したらそのまま取り消し。
+    // 判定中(active)は針が残るので、もう一度タップすれば成功できる。
+    if (sc && sc.stage === 'warn') cancelSkill();
   }
   if (S) updatePistons();
 }
@@ -325,7 +341,9 @@ el.touchLayer.addEventListener('pointerdown', (e) => {
   Sfx.unlock();
   tryFullscreenOnce();
   requestWakeLock();
-  if (sc && sc.stage === 'active') { attemptSkill(); return; } // 2本目の指のタップ
+  // スキルチェック中のタップは判定に使いつつ、その指で修理も続行できるようにする
+  // (指を離してタップし直しても、二本目の指でタップしてもOK)
+  if (sc && sc.stage === 'active') attemptSkill();
   pointers.add(e.pointerId);
   refreshTouching();
 });

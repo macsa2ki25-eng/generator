@@ -2,7 +2,14 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="FIND ME">
+<meta name="theme-color" content="#070605">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/icon.svg">
 <title>FIND ME - 発電機</title>
 <link rel="stylesheet" href="/css/style.css">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%E2%9A%99%EF%B8%8F%3C/text%3E%3C/svg%3E">
@@ -25,6 +32,11 @@
     <div class="sub">― 霧の校舎からの脱出 ―</div>
   </div>
 
+  <div id="resumeBox" hidden>
+    <a class="btn primary" id="resumeBtn" href="#" style="font-size:clamp(20px,3.6vw,30px); padding:22px 40px;">▶ 発電機 <span id="resumeNo">?</span> を再開</a>
+    <div style="color:var(--dim); font-size:13px; margin-top:10px;">前回この端末で使っていた発電機です</div>
+  </div>
+
   <div>
     <p style="color:var(--dim); letter-spacing:0.2em; margin-bottom:18px;">このタブレットの発電機を選んでください</p>
     <div class="gen-buttons">
@@ -42,5 +54,16 @@
 <div class="vignette"></div>
 <div class="grain"></div>
 
+<script>
+  // 前回この端末が使っていた発電機があれば「再開」ボタンを出す
+  try {
+    var g = localStorage.getItem('findme.lastGen');
+    if (g === '1' || g === '2' || g === '3') {
+      document.getElementById('resumeNo').textContent = g;
+      document.getElementById('resumeBtn').href = '/gen.html?g=' + g;
+      document.getElementById('resumeBox').hidden = false;
+    }
+  } catch (e) {}
+</script>
 </body>
 </html>

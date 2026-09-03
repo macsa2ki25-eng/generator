@@ -22,8 +22,8 @@ const SETTINGS_FILE = path.join(__dirname, 'settings.json');
 const DEFAULT_SETTINGS = {
   repairSeconds: 90,      // 発電機1台の修理にかかる秒数
   limitSeconds: 300,      // 制限時間(秒)
-  skillCheck: 'normal',   // off / easy / normal / hard
-  penaltyPercent: 10,     // スキルチェック失敗で減る%
+  skillCheck: 'easy',     // off / easy / normal / hard (初期値はやさしめ)
+  penaltyPercent: 8,      // スキルチェック失敗で減る%
   regression: false,      // 触っていない間ゲージが少しずつ下がる
 };
 
@@ -239,8 +239,13 @@ async function handleApi(req, res, url) {
         g.boomCount++;
         broadcast();
       } else if (body.result === 'great') {
-        g.progress = Math.min(100, g.progress + 1);
-        if (g.progress >= 100) { g.done = true; broadcast(); }
+        g.progress = Math.min(100, g.progress + 4); // 成功ボーナス(大)
+        if (g.progress >= 100) { g.done = true; }
+        broadcast();
+      } else if (body.result === 'good') {
+        g.progress = Math.min(100, g.progress + 2); // 成功ボーナス(小)
+        if (g.progress >= 100) { g.done = true; }
+        broadcast();
       }
     }
     return json(res, 200, { ok: true });
