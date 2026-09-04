@@ -499,10 +499,18 @@ function onState(st) {
   });
 
   /* --- 自分の発電機まわりの表示 --- */
+  /* ランプ/明かり/エンジン音は「完了しているか」に常に追従させる。
+     こうすると、進行中(running)のまま次のゲームを開始し直しても
+     (フェーズが変わらず reset 処理が走らなくても)確実に消える。 */
   if (own.done) {
     setLamp(true);
     el.lightflood.classList.add('on');
     if (Sfx.ready()) Sfx.humOn();
+  } else {
+    setLamp(false);
+    // ゲート開放(cleared)の演出中はライトを残す。それ以外の未完了時は消す。
+    if (S.phase !== 'cleared') el.lightflood.classList.remove('on');
+    Sfx.humOff();
   }
   el.mainBar.querySelector('.fill').style.width = own.p + '%';
   el.mainBar.classList.toggle('done', own.done);
