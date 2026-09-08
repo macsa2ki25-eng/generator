@@ -13,19 +13,26 @@ const Sfx = (() => {
 
   let noiseBuf = null;
 
-  /* ---- 修理音のファイル(ループ再生) ---- */
+  /* ---- 音声ファイル(修理中=ループ / 修理完了=単発) ---- */
   const REPAIR_URL = '/sound/repair.mp3';
-  const REPAIR_GAIN = 0.75;      // 修理音の音量(大きめ)。小さすぎ/大きすぎならここを調整
-  let repairBuffer = null;       // デコード済み音声。読めたらこれをループ再生
-  let repairLoadFailed = false;  // 読み込み/デコードに失敗したら合成音に切替
-  // ページ表示と同時にファイルの取得だけ先に始めておく(初回タッチの遅延を減らす)
-  let repairBytesPromise = null;
-  try {
-    repairBytesPromise = fetch(REPAIR_URL).then((r) => {
-      if (!r.ok) throw new Error('http ' + r.status);
-      return r.arrayBuffer();
-    });
-  } catch (_) { repairBytesPromise = null; }
+  const REPAIR_GAIN = 0.75;      // 修理音の音量。小さすぎ/大きすぎならここを調整
+  const COMPLETE_URL = '/sound/completed.mp3';
+  const COMPLETE_GAIN = 0.33;    // 修理完了音の音量(元が大きい音源なので控えめでも十分大きい)
+  let repairBuffer = null;       // デコード済み音声。読めたらループ再生
+  let repairLoadFailed = false;  // 読み込み/デコード失敗時は合成音に切替
+  let completedBuffer = null;    // 修理完了音(単発)
+  let completedLoadFailed = false;
+  // ページ表示と同時にファイル取得だけ先行(初回の遅延を減らす)
+  function preloadBytes(url) {
+    try {
+      return fetch(url).then((r) => {
+        if (!r.ok) throw new Error('http ' + r.status);
+        return r.arrayBuffer();
+      });
+    } catch (_) { return null; }
+  }
+  let repairBytesPromise = preloadBytes(REPAIR_URL);
+  let completedBytesPromise = preloadBytes(COMPLETE_URL);
 
   /* ---- 継続音のノード ---- */
   let repair = null;      // 修理ループ(再生中のノード群)
@@ -91,7 +98,8 @@ const Sfx = (() => {
       revGain.connect(master);
 
       noiseBuf = makeNoiseBuffer();
-      loadRepairSound(); // 修理音ファイルをデコード(コンテキストが出来てから)
+      loadRepairSound();    // 修理音ファイルをデコード(コンテキストが出来てから)
+      loadCompletedSound(); // 修理完了音ファイルをデコード
 
       // コンテキストが再開したら、鳴らしたかった修理音を開始する
       ctx.onstatechange = () => {
@@ -176,22 +184,34 @@ const Sfx = (() => {
                freq: 1150 + Math.random() * 250, q: 3, gain: gain * 0.7, toReverb: 0.25 });
   }
 
-  /* 修理音ファイルを取得→デコード。成功したら、すでに修理したい状態なら鳴らし始める。
+  /* バイト列(取得済みPromise)を AudioBuffer にデコードして返す(Promise) */
+  function decodeBytes(bytesPromise) {
+    return bytesPromise.then((bytes) => new Promise((resolve, reject) => {
+      // slice(0) でコピーを渡す(decodeで元バッファが無効化されるため)
+      const p = ctx.decodeAudioData(bytes.slice(0), resolve, reject);
+      if (p && p.then) p.then(resolve, reject);
+    }));
+  }
+
+  /* 修理音ファイルをデコード。成功後、すでに修理したい状態なら鳴らし始める。
      失敗したら合成のピストン音にフォールバックする。 */
   function loadRepairSound() {
     if (repairBuffer || repairLoadFailed || !ctx || !repairBytesPromise) return;
-    repairBytesPromise
-      .then((bytes) => new Promise((resolve, reject) => {
-        // 促進のため slice(0) でコピーを渡す(decodeでバッファが無効化されるため)
-        const p = ctx.decodeAudioData(bytes.slice(0), resolve, reject);
-        if (p && p.then) p.then(resolve, reject);
-      }))
+    decodeBytes(repairBytesPromise)
       .then((buf) => {
         repairBuffer = buf;
-        // すでに鳴らしたい状態なら(読み込み待ちで保留されていたら)開始する
+        // 読み込み待ちで保留されていたら開始する
         if (wantRepair && !repair && ctx.state === 'running') startRepair();
       })
       .catch(() => { repairLoadFailed = true; }); // 合成音に切替
+  }
+
+  /* 修理完了音ファイルをデコード。失敗したら合成の完了音にフォールバック。 */
+  function loadCompletedSound() {
+    if (completedBuffer || completedLoadFailed || !ctx || !completedBytesPromise) return;
+    decodeBytes(completedBytesPromise)
+      .then((buf) => { completedBuffer = buf; })
+      .catch(() => { completedLoadFailed = true; });
   }
 
   function startRepair() {
@@ -352,9 +372,32 @@ const Sfx = (() => {
     }
   }
 
-  /* 自分の発電機が完了 (ガチャン + エンジン始動) */
+  /* 自分の発電機が完了。読めていれば完了音ファイルを単発再生、
+     ダメなら合成の完了音にフォールバックする。 */
+  let completedNode = null;
   function genDone() {
     if (!ensure()) return;
+    if (completedBuffer) {
+      try { if (completedNode) completedNode.stop(); } catch (_) {}
+      const src = ctx.createBufferSource();
+      src.buffer = completedBuffer;
+      const g = ctx.createGain();
+      g.gain.value = COMPLETE_GAIN;
+      src.connect(g); g.connect(master);
+      src.onended = () => { if (completedNode === src) completedNode = null; };
+      src.start();
+      completedNode = src;
+    } else {
+      genDoneSynth();
+    }
+  }
+
+  function stopCompleted() {
+    if (completedNode) { try { completedNode.stop(); } catch (_) {} completedNode = null; }
+  }
+
+  /* フォールバック: 合成の完了音(ガチャン + エンジン始動) */
+  function genDoneSynth() {
     // ガチャンッ
     noiseHit({ dur: 0.18, freq: 700, q: 3, gain: 0.5, toReverb: 0.7 });
     tone({ dur: 0.3, type: 'triangle', freq: 220, freqEnd: 90, gain: 0.4, toReverb: 0.5 });
@@ -363,7 +406,6 @@ const Sfx = (() => {
     // 明かりが灯る「ヴンッ」
     tone({ when: 1.1, dur: 0.5, type: 'sine', freq: 660, gain: 0.12, toReverb: 0.6 });
     tone({ when: 1.1, dur: 0.7, type: 'sine', freq: 1320, gain: 0.07, toReverb: 0.6 });
-    setTimeout(humOn, 1200);
   }
 
   /* 他の発電機が完了 (遠くの鐘のような音) */
@@ -446,6 +488,7 @@ const Sfx = (() => {
   /* 全停止 (リセット時) */
   function stopAll() {
     setRepairing(false);
+    stopCompleted();
     humOff();
     heartbeat(false);
     timeoverStop();
