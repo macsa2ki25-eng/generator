@@ -1,7 +1,7 @@
 /*
  * FIND ME - サウンドエンジン
- * 音声ファイルを一切使わず、Web Audio APIで全ての効果音を合成する。
- * (学校ネットワークでも確実に動く & 著作権フリー)
+ * 効果音は Web Audio API で合成。修理中の音だけは音声ファイル(/sound/repair.mp3)を
+ * ループ再生する。ファイルが読めない時は合成のピストン音にフォールバックする。
  */
 'use strict';
 
@@ -13,8 +13,22 @@ const Sfx = (() => {
 
   let noiseBuf = null;
 
+  /* ---- 修理音のファイル(ループ再生) ---- */
+  const REPAIR_URL = '/sound/repair.mp3';
+  const REPAIR_GAIN = 0.75;      // 修理音の音量(大きめ)。小さすぎ/大きすぎならここを調整
+  let repairBuffer = null;       // デコード済み音声。読めたらこれをループ再生
+  let repairLoadFailed = false;  // 読み込み/デコードに失敗したら合成音に切替
+  // ページ表示と同時にファイルの取得だけ先に始めておく(初回タッチの遅延を減らす)
+  let repairBytesPromise = null;
+  try {
+    repairBytesPromise = fetch(REPAIR_URL).then((r) => {
+      if (!r.ok) throw new Error('http ' + r.status);
+      return r.arrayBuffer();
+    });
+  } catch (_) { repairBytesPromise = null; }
+
   /* ---- 継続音のノード ---- */
-  let repair = null;      // 修理ループ
+  let repair = null;      // 修理ループ(再生中のノード群)
   let wantRepair = false; // 修理音を鳴らしたい状態か(コンテキスト再開後に開始するため)
   let hum = null;         // 完了後のエンジン音
   let heartbeatTimer = null;
@@ -77,6 +91,7 @@ const Sfx = (() => {
       revGain.connect(master);
 
       noiseBuf = makeNoiseBuffer();
+      loadRepairSound(); // 修理音ファイルをデコード(コンテキストが出来てから)
 
       // コンテキストが再開したら、鳴らしたかった修理音を開始する
       ctx.onstatechange = () => {
@@ -161,9 +176,45 @@ const Sfx = (() => {
                freq: 1150 + Math.random() * 250, q: 3, gain: gain * 0.7, toReverb: 0.25 });
   }
 
+  /* 修理音ファイルを取得→デコード。成功したら、すでに修理したい状態なら鳴らし始める。
+     失敗したら合成のピストン音にフォールバックする。 */
+  function loadRepairSound() {
+    if (repairBuffer || repairLoadFailed || !ctx || !repairBytesPromise) return;
+    repairBytesPromise
+      .then((bytes) => new Promise((resolve, reject) => {
+        // 促進のため slice(0) でコピーを渡す(decodeでバッファが無効化されるため)
+        const p = ctx.decodeAudioData(bytes.slice(0), resolve, reject);
+        if (p && p.then) p.then(resolve, reject);
+      }))
+      .then((buf) => {
+        repairBuffer = buf;
+        // すでに鳴らしたい状態なら(読み込み待ちで保留されていたら)開始する
+        if (wantRepair && !repair && ctx.state === 'running') startRepair();
+      })
+      .catch(() => { repairLoadFailed = true; }); // 合成音に切替
+  }
+
   function startRepair() {
     if (repair || !ctx) return;
-    // --- 低いエンジンのうなり(ノイズを低く濾したもの。シンセ臭さを消す) ---
+    if (repairBuffer) startRepairFile();
+    else if (repairLoadFailed) startRepairSynth();
+    // まだ読み込み中: 何もしない。読み込み完了時に自動で開始する(loadRepairSound内)
+  }
+
+  /* 音声ファイルをループ再生 */
+  function startRepairFile() {
+    const src = ctx.createBufferSource();
+    src.buffer = repairBuffer;
+    src.loop = true;                 // 40秒ほどのファイルを継ぎ目なくループ
+    const g = ctx.createGain();
+    g.gain.value = REPAIR_GAIN;
+    src.connect(g); g.connect(master);
+    src.start();
+    repair = { type: 'file', src, gain: g };
+  }
+
+  /* フォールバック: 合成のピストン音(ファイルが読めない時) */
+  function startRepairSynth() {
     const rumbleSrc = ctx.createBufferSource();
     rumbleSrc.buffer = noiseBuf;
     rumbleSrc.loop = true;
@@ -176,24 +227,20 @@ const Sfx = (() => {
     rumbleSrc.connect(rumbleLp); rumbleLp.connect(rumbleGain); rumbleGain.connect(master);
     rumbleSrc.start();
 
-    // --- ピストンの往復(規則的なリズムで「ドッ…ドッ…」) ---
-    const period = 0.24;       // 1ストロークの間隔(秒)
+    const period = 0.24;
     let nextAt = now() + 0.05;
     let stroke = 0;
     const timer = setInterval(() => {
       if (!repair) return;
       const horizon = now() + 0.4;
       while (nextAt < horizon) {
-        const jitter = (Math.random() - 0.5) * 0.02; // ごく僅かな揺らぎ(手回し感)
+        const jitter = (Math.random() - 0.5) * 0.02;
         const w = Math.max(0, nextAt - now() + jitter);
-        const up = (stroke % 2 === 0);               // 上死点/下死点で音色を変える
-        // ピストンが打ち込む重い打撃(低域を高→低へスイープ)
+        const up = (stroke % 2 === 0);
         noiseHit({ when: w, dur: up ? 0.11 : 0.09, type: 'lowpass',
                    freq: up ? 240 : 320, freqEnd: up ? 65 : 85, q: 1.2,
                    gain: up ? 0.6 : 0.5, toReverb: 0.22 });
-        // 金属の噛み合う音
         metalClank(w + 0.012, up ? 0.2 : 0.15, up);
-        // 歯車がこすれる細かい音(たまに)
         if (Math.random() < 0.5) {
           noiseHit({ when: w + 0.05 + Math.random() * 0.06, dur: 0.05,
                      type: 'highpass', freq: 2000, q: 0.8, gain: 0.09, toReverb: 0.15 });
@@ -203,16 +250,21 @@ const Sfx = (() => {
       }
     }, 110);
 
-    repair = { rumbleSrc, rumbleGain, timer };
+    repair = { type: 'synth', rumbleSrc, rumbleGain, timer };
   }
 
   function stopRepair() {
     if (!repair) return;
     const r = repair;
     repair = null;
-    clearInterval(r.timer);
-    r.rumbleGain.gain.setTargetAtTime(0, now(), 0.05);
-    setTimeout(() => { try { r.rumbleSrc.stop(); } catch (_) {} }, 300);
+    if (r.type === 'file') {
+      r.gain.gain.setTargetAtTime(0, now(), 0.04); // 軽くフェードアウト
+      setTimeout(() => { try { r.src.stop(); } catch (_) {} }, 200);
+    } else {
+      clearInterval(r.timer);
+      r.rumbleGain.gain.setTargetAtTime(0, now(), 0.05);
+      setTimeout(() => { try { r.rumbleSrc.stop(); } catch (_) {} }, 300);
+    }
   }
 
   /* 修理音のオン/オフ。まだコンテキストが再開していなくても、
