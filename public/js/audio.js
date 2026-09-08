@@ -21,10 +21,17 @@ const Sfx = (() => {
   const REPAIR_GAIN = 0.9;       // 修理音の音量(ほぼ元ファイルどおり。歪ませない)
   const COMPLETE_URL = '/sound/completed.mp3';
   const COMPLETE_GAIN = 0.9;     // 修理完了音の音量(ほぼ元ファイルどおり)
+  const EXPLOSION_URL = '/sound/explosion.mp3';
+  // このファイルは元々小さめ(ピーク0.44)なので、迫力を出すため大きめに増幅する。
+  // クリーン経路のリミッターが天井を守るので音割れはしない。
+  const EXPLOSION_GAIN = 2.5;         // 自分の発電機の爆発(近い=大きい・修理音より目立つ)
+  const EXPLOSION_DISTANT_GAIN = 0.8; // 他の発電機の爆発(遠い=小さくこもる)
   let repairBuffer = null;       // デコード済み音声。読めたらループ再生
   let repairLoadFailed = false;  // 読み込み/デコード失敗時は合成音に切替
   let completedBuffer = null;    // 修理完了音(単発)
   let completedLoadFailed = false;
+  let explosionBuffer = null;    // 爆発音(単発)
+  let explosionLoadFailed = false;
   // ページ表示と同時にファイル取得だけ先行(初回の遅延を減らす)
   function preloadBytes(url) {
     try {
@@ -36,6 +43,7 @@ const Sfx = (() => {
   }
   let repairBytesPromise = preloadBytes(REPAIR_URL);
   let completedBytesPromise = preloadBytes(COMPLETE_URL);
+  let explosionBytesPromise = preloadBytes(EXPLOSION_URL);
 
   /* ---- 継続音のノード ---- */
   let repair = null;      // 修理ループ(再生中のノード群)
@@ -117,6 +125,7 @@ const Sfx = (() => {
       noiseBuf = makeNoiseBuffer();
       loadRepairSound();    // 修理音ファイルをデコード(コンテキストが出来てから)
       loadCompletedSound(); // 修理完了音ファイルをデコード
+      loadExplosionSound(); // 爆発音ファイルをデコード
 
       // コンテキストが再開したら、鳴らしたかった修理音を開始する
       ctx.onstatechange = () => {
@@ -229,6 +238,14 @@ const Sfx = (() => {
     decodeBytes(completedBytesPromise)
       .then((buf) => { completedBuffer = buf; })
       .catch(() => { completedLoadFailed = true; });
+  }
+
+  /* 爆発音ファイルをデコード。失敗したら合成の爆発音にフォールバック。 */
+  function loadExplosionSound() {
+    if (explosionBuffer || explosionLoadFailed || !ctx || !explosionBytesPromise) return;
+    decodeBytes(explosionBytesPromise)
+      .then((buf) => { explosionBuffer = buf; })
+      .catch(() => { explosionLoadFailed = true; });
   }
 
   function startRepair() {
@@ -366,23 +383,43 @@ const Sfx = (() => {
     noiseHit({ dur: 0.04, freq: 3200, q: 2, gain: 0.15 });
   }
 
-  /* スキルチェック失敗 = 発電機爆発 (大きく・迫力重視) */
+  /* スキルチェック失敗 = 発電機爆発。読めていれば爆発音ファイルを単発再生、
+     ダメなら合成の爆発音にフォールバックする。
+     quiet=true は「他の発電機の爆発(遠くでこもって聞こえる)」用に小さく・低く。 */
   function explosion(quiet) {
     if (!ensure()) return;
+    if (explosionBuffer) {
+      const src = ctx.createBufferSource();
+      src.buffer = explosionBuffer;
+      const g = ctx.createGain();
+      g.gain.value = quiet ? EXPLOSION_DISTANT_GAIN : EXPLOSION_GAIN;
+      src.connect(g);
+      if (quiet) {
+        // 遠くの爆発はこもった感じにする(高音を落とす)
+        const lp = ctx.createBiquadFilter();
+        lp.type = 'lowpass'; lp.frequency.value = 900; lp.Q.value = 0.7;
+        g.connect(lp); lp.connect(cleanBus);
+      } else {
+        g.connect(cleanBus); // クリーン経路=素の音のまま
+      }
+      src.start();
+    } else {
+      explosionSynth(quiet);
+    }
+  }
+
+  /* フォールバック: 合成の爆発音 */
+  function explosionSynth(quiet) {
     const v = quiet ? 0.32 : 1;
-    // 立ち上がりの鋭い「バリッ」(高め。タブレットの小さいスピーカーでもよく通る)
     noiseHit({ dur: 0.06, type: 'highpass', freq: 1900, q: 0.7, gain: 1.6 * v, toReverb: 0.35 });
-    // 本体の轟音(中域中心・高→低へスイープ)
     noiseHit({ dur: 0.85, type: 'lowpass', freq: 4000, freqEnd: 120, q: 0.8,
                gain: 2.2 * v, toReverb: 0.9 });
     noiseHit({ when: 0.015, dur: 0.5, type: 'bandpass', freq: 900, q: 1.0,
                gain: 1.6 * v, toReverb: 0.7 });
     noiseHit({ when: 0.02, dur: 0.45, type: 'bandpass', freq: 2200, q: 0.9,
                gain: 1.1 * v, toReverb: 0.6 });
-    // ズドンという低音(大きいスピーカー用の重み)
     tone({ dur: 0.6, type: 'sine', freq: 165, freqEnd: 30, gain: 1.4 * v, toReverb: 0.4 });
     tone({ dur: 0.5, type: 'square', freq: 82, freqEnd: 27, gain: 0.7 * v, toReverb: 0.3 });
-    // 破片が飛び散る
     for (let i = 0; i < 8; i++) {
       noiseHit({ when: 0.16 + i * 0.06 + Math.random() * 0.05, dur: 0.05,
                  freq: 1800 + Math.random() * 3000, q: 8, gain: 0.18 * v, toReverb: 0.5 });
