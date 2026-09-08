@@ -7,17 +7,20 @@
 
 const Sfx = (() => {
   let ctx = null;
-  let master = null;
+  let master = null;      // 合成効果音用(ドライブ+tanhで大きく潰す)
+  let cleanBus = null;    // 音声ファイル用(素の音のまま。歪ませない)
   let reverb = null;      // 空間の残響 (合成インパルス)
   let unlocked = false;
 
   let noiseBuf = null;
 
   /* ---- 音声ファイル(修理中=ループ / 修理完了=単発) ---- */
+  // ファイルはクリーン経路で「素の音のまま」再生する。1.0で元ファイルと同じ大きさ。
+  // (歪ませて大きくする回路は通さないので、上げすぎると音割れするため 1.0 以下に)
   const REPAIR_URL = '/sound/repair.mp3';
-  const REPAIR_GAIN = 0.75;      // 修理音の音量。小さすぎ/大きすぎならここを調整
+  const REPAIR_GAIN = 0.9;       // 修理音の音量(ほぼ元ファイルどおり。歪ませない)
   const COMPLETE_URL = '/sound/completed.mp3';
-  const COMPLETE_GAIN = 0.33;    // 修理完了音の音量(元が大きい音源なので控えめでも十分大きい)
+  const COMPLETE_GAIN = 0.9;     // 修理完了音の音量(ほぼ元ファイルどおり)
   let repairBuffer = null;       // デコード済み音声。読めたらループ再生
   let repairLoadFailed = false;  // 読み込み/デコード失敗時は合成音に切替
   let completedBuffer = null;    // 修理完了音(単発)
@@ -88,6 +91,20 @@ const Sfx = (() => {
       master.connect(pre);
       pre.connect(shaper);
       shaper.connect(ctx.destination);
+
+      // 音声ファイル用のクリーン経路: ドライブ/tanhを通さず素の音で鳴らす。
+      // 保険として、天井に近い所だけ軽く抑える透明なリミッターを1段だけ入れる
+      // (通常の単体再生では作動せず、音が重なった時のデジタル歪みだけ防ぐ)。
+      cleanBus = ctx.createGain();
+      cleanBus.gain.value = 1;
+      const cleanLimiter = ctx.createDynamicsCompressor();
+      cleanLimiter.threshold.value = -0.6; // 単体再生では作動しない位置。重なった時だけ効く
+      cleanLimiter.knee.value = 0;
+      cleanLimiter.ratio.value = 20;
+      cleanLimiter.attack.value = 0.003;
+      cleanLimiter.release.value = 0.12;
+      cleanBus.connect(cleanLimiter);
+      cleanLimiter.connect(ctx.destination);
 
       // 教室っぽい残響のセンドバス
       reverb = ctx.createConvolver();
@@ -221,14 +238,14 @@ const Sfx = (() => {
     // まだ読み込み中: 何もしない。読み込み完了時に自動で開始する(loadRepairSound内)
   }
 
-  /* 音声ファイルをループ再生 */
+  /* 音声ファイルをループ再生(クリーン経路=素の音のまま) */
   function startRepairFile() {
     const src = ctx.createBufferSource();
     src.buffer = repairBuffer;
     src.loop = true;                 // 40秒ほどのファイルを継ぎ目なくループ
     const g = ctx.createGain();
     g.gain.value = REPAIR_GAIN;
-    src.connect(g); g.connect(master);
+    src.connect(g); g.connect(cleanBus);
     src.start();
     repair = { type: 'file', src, gain: g };
   }
@@ -383,7 +400,7 @@ const Sfx = (() => {
       src.buffer = completedBuffer;
       const g = ctx.createGain();
       g.gain.value = COMPLETE_GAIN;
-      src.connect(g); g.connect(master);
+      src.connect(g); g.connect(cleanBus);   // クリーン経路=素の音のまま
       src.onended = () => { if (completedNode === src) completedNode = null; };
       src.start();
       completedNode = src;
