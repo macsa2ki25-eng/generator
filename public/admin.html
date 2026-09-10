@@ -43,6 +43,14 @@
       </div>
     </div>
 
+    <div class="panel scream-card">
+      <button class="scream-btn" id="screamBtn">
+        <span class="scream-icon">😱</span>
+        <span class="scream-label">殺人鬼の叫び声</span>
+        <span class="scream-hint">押している間だけ鳴る（このタブレットからのみ）</span>
+      </button>
+    </div>
+
     <div class="panel gen-card" id="genCard0">
       <div class="gc-head"><span class="gc-title">発電機 1</span><span class="gc-pct num">0%</span></div>
       <div class="pbar"><div class="fill"></div><div class="ticks"></div></div>
@@ -142,6 +150,7 @@
 <div class="vignette"></div>
 <div class="grain"></div>
 
+<script>window.SFX_PRELOAD = ['explosion', 'scream'];</script>
 <script src="/js/audio.js"></script>
 <script src="/js/net.js"></script>
 <script src="/js/admin.js"></script>

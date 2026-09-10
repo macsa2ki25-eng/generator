@@ -17,6 +17,7 @@ const el = {
   saveBtn: $('saveBtn'),
   saveMsg: $('saveMsg'),
   soundToggle: $('soundToggle'),
+  screamBtn: $('screamBtn'),
   connBanner: $('connBanner'),
 };
 
@@ -109,6 +110,38 @@ el.resetBtn.addEventListener('click', () => {
   if (S && S.phase === 'running' && !confirm('ゲーム進行中です。リセットして待機画面に戻しますか？')) return;
   Net.admin('reset');
 });
+
+/* ---------------- 殺人鬼の叫び声 (この端末からのみ鳴らす) ---------------- */
+/* 押している間だけ再生する。効果音オン/オフの設定とは無関係に鳴らせるよう、
+   押した時点で音声のロック解除も行う。 */
+
+let screaming = false;
+
+function screamStart(e) {
+  if (e) e.preventDefault();
+  if (screaming) return;
+  screaming = true;
+  Sfx.unlock();
+  Sfx.setScreaming(true);
+  el.screamBtn.classList.add('screaming');
+}
+
+function screamStop() {
+  if (!screaming) return;
+  screaming = false;
+  Sfx.setScreaming(false);
+  el.screamBtn.classList.remove('screaming');
+}
+
+el.screamBtn.addEventListener('pointerdown', screamStart);
+/* 指がボタンの外に出て離された場合も確実に止める */
+['pointerup', 'pointercancel'].forEach((ev) => window.addEventListener(ev, screamStop));
+window.addEventListener('blur', screamStop);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') screamStop();
+});
+/* 長押しでの選択・コンテキストメニューを抑止 */
+el.screamBtn.addEventListener('contextmenu', (e) => e.preventDefault());
 
 /* ---------------- 効果音 (スタッフ端末でも鳴らせる) ---------------- */
 

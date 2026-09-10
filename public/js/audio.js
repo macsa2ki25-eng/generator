@@ -1,7 +1,12 @@
 /*
  * FIND ME - サウンドエンジン
- * 効果音は Web Audio API で合成。修理中の音だけは音声ファイル(/sound/repair.mp3)を
- * ループ再生する。ファイルが読めない時は合成のピストン音にフォールバックする。
+ * ・主要な音(修理中/修理完了/爆発/叫び声)は /sound/*.mp3 を再生する。
+ *   これらは「クリーン経路」で素の音のまま鳴らす(歪ませない)。
+ * ・その他の効果音(スキルチェック等)は Web Audio API で合成し、
+ *   会場で聞こえるよう「ドライブ+tanh」で大きく鳴らす。
+ * ・ファイルが読めない時は合成音に自動フォールバックする。
+ * ・読み込む音は各HTMLの window.SFX_PRELOAD で指定する(未使用の音源を
+ *   メモリ展開しないため)。
  */
 'use strict';
 
@@ -14,25 +19,30 @@ const Sfx = (() => {
 
   let noiseBuf = null;
 
-  /* ---- 音声ファイル(修理中=ループ / 修理完了=単発) ---- */
+  /* ---- 音声ファイル ---- */
   // ファイルはクリーン経路で「素の音のまま」再生する。1.0で元ファイルと同じ大きさ。
-  // (歪ませて大きくする回路は通さないので、上げすぎると音割れするため 1.0 以下に)
-  const REPAIR_URL = '/sound/repair.mp3';
+  // (歪ませて大きくする回路は通さないので、上げすぎると音割れする)
+  const SOUND_URLS = {
+    repair:    '/sound/repair.mp3',    // 修理中(押している間ループ)
+    completed: '/sound/completed.mp3', // 修理完了(単発)
+    explosion: '/sound/explosion.mp3', // スキルチェック失敗(単発)
+    scream:    '/sound/scream.mp3',    // 殺人鬼の叫び声(スタッフ画面で押している間)
+  };
   const REPAIR_GAIN = 0.9;       // 修理音の音量(ほぼ元ファイルどおり。歪ませない)
-  const COMPLETE_URL = '/sound/completed.mp3';
   const COMPLETE_GAIN = 0.9;     // 修理完了音の音量(ほぼ元ファイルどおり)
-  const EXPLOSION_URL = '/sound/explosion.mp3';
-  // このファイルは元々小さめ(ピーク0.44)なので、迫力を出すため大きめに増幅する。
+  // 爆発音は元々小さめ(ピーク0.44)なので、迫力を出すため大きめに増幅する。
   // クリーン経路のリミッターが天井を守るので音割れはしない。
   const EXPLOSION_GAIN = 2.5;         // 自分の発電機の爆発(近い=大きい・修理音より目立つ)
   const EXPLOSION_DISTANT_GAIN = 0.8; // 他の発電機の爆発(遠い=小さくこもる)
-  let repairBuffer = null;       // デコード済み音声。読めたらループ再生
-  let repairLoadFailed = false;  // 読み込み/デコード失敗時は合成音に切替
-  let completedBuffer = null;    // 修理完了音(単発)
-  let completedLoadFailed = false;
-  let explosionBuffer = null;    // 爆発音(単発)
-  let explosionLoadFailed = false;
-  // ページ表示と同時にファイル取得だけ先行(初回の遅延を減らす)
+  const SCREAM_GAIN = 0.9;            // 叫び声の音量(ほぼ元ファイルどおり)
+
+  const buf = {};         // 名前 -> デコード済み AudioBuffer
+  const loadFailed = {};  // 名前 -> true (読み込み/デコード失敗。合成音に切替)
+  const bytes = {};       // 名前 -> Promise<ArrayBuffer>
+
+  // ページ表示と同時にファイル取得だけ先行(初回の遅延を減らす)。
+  // ただし、そのページで使う音だけにする(長い音源を無駄にメモリ展開しないため)。
+  // 各HTMLで audio.js より前に window.SFX_PRELOAD = ['repair', ...] を指定する。
   function preloadBytes(url) {
     try {
       return fetch(url).then((r) => {
@@ -41,13 +51,17 @@ const Sfx = (() => {
       });
     } catch (_) { return null; }
   }
-  let repairBytesPromise = preloadBytes(REPAIR_URL);
-  let completedBytesPromise = preloadBytes(COMPLETE_URL);
-  let explosionBytesPromise = preloadBytes(EXPLOSION_URL);
+  const wantFiles = (typeof window !== 'undefined' && Array.isArray(window.SFX_PRELOAD))
+    ? window.SFX_PRELOAD : Object.keys(SOUND_URLS);
+  wantFiles.forEach((name) => {
+    if (SOUND_URLS[name]) bytes[name] = preloadBytes(SOUND_URLS[name]);
+  });
 
   /* ---- 継続音のノード ---- */
   let repair = null;      // 修理ループ(再生中のノード群)
   let wantRepair = false; // 修理音を鳴らしたい状態か(コンテキスト再開後に開始するため)
+  let screamNode = null;  // 叫び声(スタッフ画面で押している間)
+  let wantScream = false;
   let hum = null;         // 完了後のエンジン音
   let heartbeatTimer = null;
   let droneNodes = null;  // タイムオーバーの持続音
@@ -123,13 +137,22 @@ const Sfx = (() => {
       revGain.connect(master);
 
       noiseBuf = makeNoiseBuffer();
-      loadRepairSound();    // 修理音ファイルをデコード(コンテキストが出来てから)
-      loadCompletedSound(); // 修理完了音ファイルをデコード
-      loadExplosionSound(); // 爆発音ファイルをデコード
+      // 音声ファイルをデコード(コンテキストが出来てから)。
+      // 読み込み待ちの間に押されていた場合は、完了時に鳴らし始める。
+      loadSound('repair', () => {
+        if (wantRepair && !repair && ctx.state === 'running') startRepair();
+      });
+      loadSound('completed');
+      loadSound('explosion');
+      loadSound('scream', () => {
+        if (wantScream && !screamNode && ctx.state === 'running') startScream();
+      });
 
-      // コンテキストが再開したら、鳴らしたかった修理音を開始する
+      // コンテキストが再開したら、鳴らしたかった音を開始する
       ctx.onstatechange = () => {
-        if (ctx.state === 'running' && wantRepair && !repair) startRepair();
+        if (ctx.state !== 'running') return;
+        if (wantRepair && !repair) startRepair();
+        if (wantScream && !screamNode) startScream();
       };
     }
     if (ctx.state === 'suspended') ctx.resume();
@@ -210,55 +233,32 @@ const Sfx = (() => {
                freq: 1150 + Math.random() * 250, q: 3, gain: gain * 0.7, toReverb: 0.25 });
   }
 
-  /* バイト列(取得済みPromise)を AudioBuffer にデコードして返す(Promise) */
-  function decodeBytes(bytesPromise) {
-    return bytesPromise.then((bytes) => new Promise((resolve, reject) => {
-      // slice(0) でコピーを渡す(decodeで元バッファが無効化されるため)
-      const p = ctx.decodeAudioData(bytes.slice(0), resolve, reject);
-      if (p && p.then) p.then(resolve, reject);
-    }));
-  }
-
-  /* 修理音ファイルをデコード。成功後、すでに修理したい状態なら鳴らし始める。
-     失敗したら合成のピストン音にフォールバックする。 */
-  function loadRepairSound() {
-    if (repairBuffer || repairLoadFailed || !ctx || !repairBytesPromise) return;
-    decodeBytes(repairBytesPromise)
-      .then((buf) => {
-        repairBuffer = buf;
-        // 読み込み待ちで保留されていたら開始する
-        if (wantRepair && !repair && ctx.state === 'running') startRepair();
-      })
-      .catch(() => { repairLoadFailed = true; }); // 合成音に切替
-  }
-
-  /* 修理完了音ファイルをデコード。失敗したら合成の完了音にフォールバック。 */
-  function loadCompletedSound() {
-    if (completedBuffer || completedLoadFailed || !ctx || !completedBytesPromise) return;
-    decodeBytes(completedBytesPromise)
-      .then((buf) => { completedBuffer = buf; })
-      .catch(() => { completedLoadFailed = true; });
-  }
-
-  /* 爆発音ファイルをデコード。失敗したら合成の爆発音にフォールバック。 */
-  function loadExplosionSound() {
-    if (explosionBuffer || explosionLoadFailed || !ctx || !explosionBytesPromise) return;
-    decodeBytes(explosionBytesPromise)
-      .then((buf) => { explosionBuffer = buf; })
-      .catch(() => { explosionLoadFailed = true; });
+  /* 取得済みバイト列を AudioBuffer にデコードして buf[name] に入れる。
+     失敗したら loadFailed[name] を立てて合成音にフォールバックさせる。
+     onReady: 読み込み待ちで保留していた再生を開始するためのコールバック。 */
+  function loadSound(name, onReady) {
+    if (buf[name] || loadFailed[name] || !ctx || !bytes[name]) return;
+    bytes[name]
+      .then((raw) => new Promise((resolve, reject) => {
+        // slice(0) でコピーを渡す(decodeで元バッファが無効化されるため)
+        const p = ctx.decodeAudioData(raw.slice(0), resolve, reject);
+        if (p && p.then) p.then(resolve, reject);
+      }))
+      .then((decoded) => { buf[name] = decoded; if (onReady) onReady(); })
+      .catch(() => { loadFailed[name] = true; });
   }
 
   function startRepair() {
     if (repair || !ctx) return;
-    if (repairBuffer) startRepairFile();
-    else if (repairLoadFailed) startRepairSynth();
+    if (buf.repair) startRepairFile();
+    else if (loadFailed.repair) startRepairSynth();
     // まだ読み込み中: 何もしない。読み込み完了時に自動で開始する(loadRepairSound内)
   }
 
   /* 音声ファイルをループ再生(クリーン経路=素の音のまま) */
   function startRepairFile() {
     const src = ctx.createBufferSource();
-    src.buffer = repairBuffer;
+    src.buffer = buf.repair;
     src.loop = true;                 // 40秒ほどのファイルを継ぎ目なくループ
     const g = ctx.createGain();
     g.gain.value = REPAIR_GAIN;
@@ -335,6 +335,43 @@ const Sfx = (() => {
   }
 
   /* ================================================================ */
+  /* 殺人鬼の叫び声 (スタッフ画面のボタンを押している間だけ鳴らす)      */
+  /* ================================================================ */
+
+  function startScream() {
+    if (screamNode || !ctx || !buf.scream) return;
+    const src = ctx.createBufferSource();
+    src.buffer = buf.scream;
+    src.loop = true;              // 押しっぱなしでも途切れないように
+    const g = ctx.createGain();
+    g.gain.value = SCREAM_GAIN;
+    src.connect(g); g.connect(cleanBus); // クリーン経路=素の音のまま
+    src.start();
+    screamNode = { src, gain: g };
+  }
+
+  function stopScream() {
+    if (!screamNode) return;
+    const s = screamNode;
+    screamNode = null;
+    s.gain.gain.setTargetAtTime(0, now(), 0.03); // ブツッと切れないよう軽くフェード
+    setTimeout(() => { try { s.src.stop(); } catch (_) {} }, 150);
+  }
+
+  /* 叫び声のオン/オフ。押した時点で読み込みがまだでも、
+     wantScream を立てておけば読み込み完了時に鳴り始める。 */
+  function setScreaming(on) {
+    wantScream = on;
+    if (!ctx) return;
+    if (on) {
+      if (ctx.state === 'suspended') ctx.resume();
+      if (ctx.state === 'running') startScream();
+    } else {
+      stopScream();
+    }
+  }
+
+  /* ================================================================ */
   /* 完了後のエンジン稼働音                                            */
   /* ================================================================ */
 
@@ -388,9 +425,9 @@ const Sfx = (() => {
      quiet=true は「他の発電機の爆発(遠くでこもって聞こえる)」用に小さく・低く。 */
   function explosion(quiet) {
     if (!ensure()) return;
-    if (explosionBuffer) {
+    if (buf.explosion) {
       const src = ctx.createBufferSource();
-      src.buffer = explosionBuffer;
+      src.buffer = buf.explosion;
       const g = ctx.createGain();
       g.gain.value = quiet ? EXPLOSION_DISTANT_GAIN : EXPLOSION_GAIN;
       src.connect(g);
@@ -431,10 +468,10 @@ const Sfx = (() => {
   let completedNode = null;
   function genDone() {
     if (!ensure()) return;
-    if (completedBuffer) {
+    if (buf.completed) {
       try { if (completedNode) completedNode.stop(); } catch (_) {}
       const src = ctx.createBufferSource();
-      src.buffer = completedBuffer;
+      src.buffer = buf.completed;
       const g = ctx.createGain();
       g.gain.value = COMPLETE_GAIN;
       src.connect(g); g.connect(cleanBus);   // クリーン経路=素の音のまま
@@ -550,7 +587,7 @@ const Sfx = (() => {
 
   return {
     unlock, ready,
-    setRepairing, humOn, humOff,
+    setRepairing, setScreaming, humOn, humOff,
     skillWarn, skillGood, skillGreat, explosion,
     genDone, distantDone, gateOpen,
     timeoverStart, timeoverStop,
