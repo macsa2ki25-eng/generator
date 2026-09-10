@@ -143,6 +143,29 @@ document.addEventListener('visibilitychange', () => {
 /* 長押しでの選択・コンテキストメニューを抑止 */
 el.screamBtn.addEventListener('contextmenu', (e) => e.preventDefault());
 
+/* ---------------- 画面が消えない/固まらないようにする ---------------- */
+/* スタッフ画面は、次のお客さんを案内している間など長く放置されがち。
+   画面が消えるとブラウザがページを止めてしまい、表示が固まったように見えるため、
+   発電機画面と同じように画面スリープを防ぎ、復帰時には取り直す。 */
+
+let wakeLock = null;
+async function requestWakeLock() {
+  try {
+    if ('wakeLock' in navigator && (!wakeLock || wakeLock.released)) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+    }
+  } catch (_) { wakeLock = null; }
+}
+requestWakeLock();
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') requestWakeLock();
+});
+window.addEventListener('focus', requestWakeLock);
+setInterval(() => { if (document.visibilityState === 'visible') requestWakeLock(); }, 20000);
+/* 画面のどこかを触った時にも取り直す(初回はユーザー操作が必要な端末があるため) */
+document.addEventListener('pointerdown', requestWakeLock, true);
+
 /* ---------------- 効果音 (スタッフ端末でも鳴らせる) ---------------- */
 
 el.soundToggle.addEventListener('click', () => {
